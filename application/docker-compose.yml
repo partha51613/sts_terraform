@@ -1,0 +1,8 @@
+services:
+  app:
+    build: .
+    image: simple-time-service
+    container_name: simple-time-service
+    ports:
+      - "3001:3001"
+    restart: unless-stopped
