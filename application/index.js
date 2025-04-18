@@ -1,31 +1,44 @@
 const http = require('http');
 const https = require('https');
 
-// Function to get public IP address
-const getPublicIP = () => {
+// fallback function to get public IP via external service
+function fetchPublicIP() {
   return new Promise((resolve, reject) => {
     https.get('https://api.ipify.org?format=json', (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
-      res.on('end', () => resolve(JSON.parse(data).ip));
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data).ip);
+        } catch (e) {
+          reject('Failed to parse IP');
+        }
+      });
     }).on('error', err => reject(err));
   });
-};
+}
 
-// Create the server
+function getClientIPv4(req) {
+  let ip =
+    req.headers['x-forwarded-for']?.split(',')[0].trim() ||
+    req.socket?.remoteAddress ||
+    '';
+
+  if (ip.startsWith('::ffff:')) ip = ip.substring(7);
+
+  return ip;
+}
+
 const server = http.createServer(async (req, res) => {
-  // Health check endpoint
   if (req.url === '/healthy') {
-    res.writeHead(200); // Respond with HTTP 200 OK
-    res.end('OK');      // Minimal content for ECS health check
+    res.writeHead(200);
+    res.end('OK');
     return;
   }
 
-  // Time Format
   const now = new Date();
   const date = `${now.getDate().toString().padStart(2, '0')}/${
     (now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
-  
   let hours = now.getHours();
   const minutes = now.getMinutes().toString().padStart(2, '0');
   const seconds = now.getSeconds().toString().padStart(2, '0');
@@ -34,26 +47,32 @@ const server = http.createServer(async (req, res) => {
   const time = `${hours.toString().padStart(2, '0')}:${minutes}:${seconds} ${ampm}`;
   const timestamp = `${date} ${time}`;
 
-  try {
-    // Get public IP
-    const ip = await getPublicIP();
+  let ip = getClientIPv4(req);
 
-    const responseData = {
-      timestamp: timestamp,
-      ip: ip
-    };
+  const isLocalOrPrivate =
+    ip === '127.0.0.1' ||
+    ip.startsWith('192.168.') ||
+    ip.startsWith('10.') ||
+    ip.startsWith('172.');
 
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(responseData, null, 2));
-  } catch (err) {
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Failed to get public IP' }));
+  if (isLocalOrPrivate) {
+    try {
+      ip = await fetchPublicIP();
+    } catch (e) {
+      ip = 'Unknown';
+    }
   }
+
+  const responseData = {
+    timestamp,
+    ip
+  };
+
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(responseData, null, 2));
 });
 
-// Start the server on port 3001
 const PORT = 3001;
 server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });
-
